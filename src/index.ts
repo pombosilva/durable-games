@@ -1,40 +1,41 @@
-import { Game } from './game';
+import { Game } from "./game";
+import { Hono } from "hono";
 
 export { Game };
 
-export default {
-  async fetch(req: Request, env: any) {
-    try{
-    const url = new URL(req.url);
-    const pathname = url.pathname;
+const app = new Hono<{ Bindings: Env }>();
 
-    if (req.method === "POST" && pathname === "/create") {
-      const id = crypto.randomUUID();
-      const stub = env.GAME.get(env.GAME.idFromName(id));
+app.post("/create", async (c) => {
+  const id = crypto.randomUUID();
+  const stub = c.env.GAME.get(c.env.GAME.idFromName(id));
 
-      // Trigger creation: forces the Durable Object to be created and initialized
-      // Prevents that a client tries to create a game before the Durable Object is ready
-      await stub.fetch(new Request("https://fake/init", { method: "POST" }));
+  // Trigger creation: forces the Durable Object to be created and initialized
+  // Prevents that a client tries to create a game before the Durable Object is ready
+  await stub.fetch(new Request("https://fake/init", { method: "POST" }));
 
-      return Response.json({ gameId: id });
-    }
+  return c.json({ gameId: id });
+});
 
-    const match = pathname.match(/^\/(join|move|reset|state)\/([\w-]+)$/);
-    if (match) {
-      const [_, action, id] = match;
-      const stub = env.GAME.get(env.GAME.idFromName(id));
-      const path = "/" + action;
-      return stub.fetch(new Request(new URL(path, req.url), req));
-    }
+// Matches /join/:id, /move/:id, /reset/:id, /state/:id
+app.all("/:action{join|move|reset|state}/:id", async (c) => {
+  const { action, id } = c.req.param();
 
-    if (env.ASSETS && typeof env.ASSETS.fetch === "function") {
-      return env.ASSETS.fetch(req);
-    }
+  const stub = c.env.GAME.get(c.env.GAME.idFromName(id));
+  const path = "/" + action;
 
-    return new Response("Not found", { status: 404 });
+  // Forward the original request (method/headers/body) to the DO
+  const res = await stub.fetch(
+    new Request(new URL(path, c.req.url), c.req.raw)
+  );
+  return res;
+});
 
-    } catch (err) {
-      return new Response("Internal Server Error", { status: 500 });
-    }
+// Serve static assets
+app.all("*", async (c) => {
+  if (c.env.ASSETS && typeof c.env.ASSETS.fetch === "function") {
+    return c.env.ASSETS.fetch(c.req.raw);
   }
-};
+  return c.notFound();
+});
+
+export default app;

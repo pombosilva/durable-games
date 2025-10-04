@@ -1,6 +1,6 @@
 name = "tic-tac-toe"
 main = "src/index.ts"
-compatibility_date = "2025-07-04"
+compatibility_date = "2025-10-04"
 
 [durable_objects]
 bindings = [
@@ -9,6 +9,7 @@ bindings = [
 
 [assets]
 directory = "./dist"
+binding = "ASSETS"
 
 [[migrations]]
 tag = "v1"
