@@ -62,6 +62,14 @@ app.post("/reset/:id", async (c) => {
   return Response.json("reset");
 });
 
+app.get("ws/:id", async (c) => {
+  const id = c.req.param("id");
+  const stubId = c.env.GAME.idFromName(id);
+  const stub = c.env.GAME.get(stubId);
+
+  return await stub.fetch(c.req.raw);
+});
+
 // Serve static assets
 app.all("*", async (c) => {
   if (c.env.ASSETS && typeof c.env.ASSETS.fetch === "function") {

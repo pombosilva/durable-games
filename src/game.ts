@@ -10,7 +10,7 @@ export type GameState = {
 const MAX_USERS = 2;
 
 export class Game extends DurableObject {
-  gameState: GameState;
+  private gameState: GameState;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -23,20 +23,24 @@ export class Game extends DurableObject {
       turn: 0,
       winner: null,
     };
-    await this.save();
+    await this.saveState(this.gameState);
   }
 
-  async save() {
-    await this.ctx.storage.put("state", this.gameState);
+  async saveState(state) {
+    await this.ctx.storage.put("state", state);
   }
 
   async join(): Promise<string | undefined> {
     if (this.gameState.players.length >= MAX_USERS) {
       return undefined;
     }
+
     const playerId = crypto.randomUUID();
     this.gameState.players.push(playerId);
-    await this.save();
+
+    await this.saveState(this.gameState);
+    this.broadcastState();
+
     return playerId;
   }
 
@@ -60,7 +64,9 @@ export class Game extends DurableObject {
       this.gameState.turn = 1 - turn;
     }
 
-    await this.save();
+    await this.saveState(this.gameState);
+    this.broadcastState();
+
     return this.gameState;
   }
 
@@ -71,7 +77,7 @@ export class Game extends DurableObject {
       turn: this.gameState.turn,
       winner: null,
     };
-    await this.save();
+    await this.saveState(this.gameState);
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -80,21 +86,63 @@ export class Game extends DurableObject {
       if (stored) this.gameState = stored;
     });
 
-    const url = new URL(req.url);
-    const pathname = url.pathname;
-
-    if (req.method === "POST" && pathname === "/reset") {
-      this.gameState = {
-        board: Array(9).fill(""),
-        players: [],
-        turn: 0,
-        winner: null,
-      };
-      await this.save();
-      return new Response("Reset", { status: 200 });
+    if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      return this.createWebSocket();
     }
 
     return new Response("Not found", { status: 404 });
+  }
+
+  // Broadcast game state to all connected clients (players)
+  private broadcastState() {
+    const message = JSON.stringify({ type: "state", data: this.gameState });
+    for (const ws of this.ctx.getWebSockets()) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(message);
+      }
+    }
+  }
+
+  private createWebSocket() {
+    const webSocketPair = new WebSocketPair();
+    const [client, server] = Object.values(webSocketPair);
+
+    this.ctx.acceptWebSocket(server);
+
+    const payload = JSON.stringify({ type: "state", data: this.gameState });
+
+    setTimeout(() => {
+      this.broadcastState();
+    }, 0);
+
+    // send initial state on the client side returned to caller
+    // client.send(JSON.stringify({ type: "state", data: this.gameState }));
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+    });
+  }
+
+  async webSocketMessage(ws: WebSocket, message: string) {
+    const msg = JSON.parse(message);
+    if (msg.type === "state") {
+      this.gameState = msg.data;
+      await this.saveState(msg.data);
+    } else if (msg.type === "move") {
+      await this.move(msg.index, msg.playerId);
+    } else if (msg.type === "reset") {
+      await this.reset();
+    }
+  }
+
+  async webSocketClose(
+    ws: WebSocket,
+    code: number,
+    reason: string,
+    wasClean: boolean
+  ) {
+    // ws.close(code, "DO is lcosing WebSocket");
   }
 
   checkWinner(): string | null {

@@ -6,6 +6,8 @@ export default function App() {
   const [gameId, setGameId] = useState<string | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [gameState, setGameState] = useState<any>(null);
+  const [ws, setWs] = useState<WebSocket | null>(null);
+  const [isFull, setFull] = useState<boolean | null>(null);
 
   // Read ?game=... from URL when the component loads
   useEffect(() => {
@@ -23,12 +25,36 @@ export default function App() {
     }
   }, [gameId]);
 
-  // Poll for game state
-  // TODO: this polls every 2 sec -> should only get the state after a player makes a move (use WebSockets)
+  // Connect to WebSocket when gameId is available
   useEffect(() => {
     if (!gameId) return;
-    const interval = setInterval(fetchGameState, 2000);
-    return () => clearInterval(interval);
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${window.location.host}/ws/${gameId}`;
+    const webSocket = new WebSocket(wsUrl);
+
+    webSocket.addEventListener("open", () => {
+      console.log("WebSocket connected");
+      setWs(webSocket);
+    });
+
+    webSocket.addEventListener("message", (event) => {
+      const state = JSON.parse(event.data);
+      setGameState(state.data ?? state);
+    });
+
+    webSocket.addEventListener("close", () => {
+      console.log("WebSocket disconnected");
+      setWs(null);
+    });
+
+    webSocket.addEventListener("error", (error) => {
+      console.error("WebSocket error:", error);
+    });
+
+    return () => {
+      webSocket.close();
+    };
   }, [gameId]);
 
   const createGame = async () => {
@@ -41,6 +67,10 @@ export default function App() {
   const joinGame = async () => {
     if (!gameId) return;
     const res = await fetch(`/join/${gameId}`, { method: "POST" });
+    if (res.status === 403) {
+      setFull(true);
+      return;
+    }
     const data: { playerId: string } = await res.json();
     setPlayerId(data.playerId);
   };
@@ -52,15 +82,7 @@ export default function App() {
       body: JSON.stringify({ index, playerId }),
       headers: { "Content-Type": "application/json" },
     });
-    fetchGameState();
   };
-
-  const fetchGameState = useCallback(async () => {
-    if (!gameId) return;
-    const res = await fetch(`/state/${gameId}`);
-    const data: { state: GameState } = await res.json();
-    setGameState(data.state);
-  }, [gameId]);
 
   const resetGame = async () => {
     if (!gameId || !playerId) return;
@@ -74,15 +96,10 @@ export default function App() {
 
       {!gameId && <button onClick={createGame}>Create new game</button>}
 
-      {gameId && !playerId && <p>Joining game...</p>}
+      {gameId && !playerId && !isFull && <p>Joining game...</p>}
+      {gameId && isFull && <p>Spectating game...</p>}
       {gameId && playerId && (
         <>
-          <p>
-            <b>Game ID:</b> {gameId}
-          </p>
-          <p>
-            <b>Player:</b> {playerId.slice(0, 5)}...
-          </p>
           <p>
             Share this link with another player: <br />
             <a href={`?game=${gameId}`}>
@@ -95,6 +112,11 @@ export default function App() {
 
       {gameState && (
         <>
+          {playerId && (
+            <p>
+              <b>Player:</b> {gameState.players[0] === playerId ? "X" : "O"}
+            </p>
+          )}
           <GameBoard
             board={gameState.board}
             onClick={makeMove}
@@ -104,7 +126,9 @@ export default function App() {
               gameState.winner
             }
           />
-          <p>Turno de: {gameState.turn === 0 ? "X" : "O"}</p>
+          {!gameState.winner && (
+            <p>Turno de: {gameState.turn === 0 ? "X" : "O"}</p>
+          )}
           {gameState.winner && (
             <p>
               <b>Resultado:</b> {gameState.winner}
