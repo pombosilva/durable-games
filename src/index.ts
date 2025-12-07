@@ -7,27 +7,59 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.post("/create", async (c) => {
   const id = crypto.randomUUID();
-  const stub = c.env.GAME.get(c.env.GAME.idFromName(id));
+  const stubId = c.env.GAME.idFromName(id);
+  const stub = c.env.GAME.get(stubId);
 
-  // Trigger creation: forces the Durable Object to be created and initialized
-  // Prevents that a client tries to create a game before the Durable Object is ready
-  await stub.fetch(new Request("https://fake/init", { method: "POST" }));
-
+  await stub.init();
   return c.json({ gameId: id });
 });
 
-// Matches /join/:id, /move/:id, /reset/:id, /state/:id
-app.all("/:action{join|move|reset|state}/:id", async (c) => {
-  const { action, id } = c.req.param();
+app.post("/join/:id", async (c) => {
+  const id = c.req.param("id");
+  const stubId = c.env.GAME.idFromName(id);
+  const stub = c.env.GAME.get(stubId);
 
-  const stub = c.env.GAME.get(c.env.GAME.idFromName(id));
-  const path = "/" + action;
+  const playerId = await stub.join();
+  if (playerId === undefined) {
+    return new Response("Game full", { status: 403 });
+  }
+  return Response.json({ playerId });
+});
 
-  // Forward the original request (method/headers/body) to the DO
-  const res = await stub.fetch(
-    new Request(new URL(path, c.req.url), c.req.raw)
-  );
-  return res;
+app.get("/state/:id", async (c) => {
+  const id = c.req.param("id");
+  const stubId = c.env.GAME.idFromName(id);
+  const stub = c.env.GAME.get(stubId);
+
+  const state = await stub.getState();
+  return Response.json({ state });
+});
+
+app.post("/move/:id", async (c) => {
+  const id = c.req.param("id");
+  const stubId = c.env.GAME.idFromName(id);
+  const stub = c.env.GAME.get(stubId);
+
+  const { index, playerId } = (await c.req.json()) as {
+    index: number;
+    playerId: string;
+  };
+
+  const state = await stub.move(index, playerId);
+  if (state === undefined) {
+    return new Response("Invalid move", { status: 400 });
+  }
+
+  return Response.json(state);
+});
+
+app.post("/reset/:id", async (c) => {
+  const id = c.req.param("id");
+  const stubId = c.env.GAME.idFromName(id);
+  const stub = c.env.GAME.get(stubId);
+
+  await stub.reset();
+  return Response.json("reset");
 });
 
 // Serve static assets

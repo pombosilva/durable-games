@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import GameBoard from "./GameBoard";
+import type { GameState } from "../game";
 
 export default function App() {
   const [gameId, setGameId] = useState<string | null>(null);
@@ -23,9 +24,10 @@ export default function App() {
   }, [gameId]);
 
   // Poll for game state
+  // TODO: this polls every 2 sec -> should only get the state after a player makes a move (use WebSockets)
   useEffect(() => {
     if (!gameId) return;
-    const interval = setInterval(fetchGameState, 1000);
+    const interval = setInterval(fetchGameState, 2000);
     return () => clearInterval(interval);
   }, [gameId]);
 
@@ -48,16 +50,22 @@ export default function App() {
     await fetch(`/move/${gameId}`, {
       method: "POST",
       body: JSON.stringify({ index, playerId }),
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json" },
     });
     fetchGameState();
   };
 
-  const fetchGameState = async () => {
+  const fetchGameState = useCallback(async () => {
     if (!gameId) return;
     const res = await fetch(`/state/${gameId}`);
-    const data = await res.json();
-    setGameState(data);
+    const data: { state: GameState } = await res.json();
+    setGameState(data.state);
+  }, [gameId]);
+
+  const resetGame = async () => {
+    if (!gameId || !playerId) return;
+    const res = await fetch(`/reset/${gameId}`, { method: "POST" });
+    const data: { gameId: string } = await res.json();
   };
 
   return (
@@ -69,14 +77,19 @@ export default function App() {
       {gameId && !playerId && <p>Joining game...</p>}
       {gameId && playerId && (
         <>
-          <p><b>Game ID:</b> {gameId}</p>
-          <p><b>Player:</b> {playerId.slice(0, 5)}...</p>
+          <p>
+            <b>Game ID:</b> {gameId}
+          </p>
+          <p>
+            <b>Player:</b> {playerId.slice(0, 5)}...
+          </p>
           <p>
             Share this link with another player: <br />
             <a href={`?game=${gameId}`}>
               {window.location.origin}?game={gameId}
             </a>
           </p>
+          <button onClick={resetGame}>Reset Game</button>
         </>
       )}
 
@@ -92,7 +105,11 @@ export default function App() {
             }
           />
           <p>Turno de: {gameState.turn === 0 ? "X" : "O"}</p>
-          {gameState.winner && <p><b>Resultado:</b> {gameState.winner}</p>}
+          {gameState.winner && (
+            <p>
+              <b>Resultado:</b> {gameState.winner}
+            </p>
+          )}
         </>
       )}
     </div>
